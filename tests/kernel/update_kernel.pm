@@ -399,7 +399,7 @@ sub boot_to_console {
 sub run {
     my $self = shift;
 
-    if ((is_ipmi && get_var('LTP_BAREMETAL')) || is_transactional) {
+    if ((is_ipmi && get_var('LTP_BAREMETAL')) || is_transactional || get_var('FORCE_SERIAL_TERMINAL')) {
         # System is already booted after installation, just switch terminal
         select_serial_terminal;
     } else {
@@ -477,7 +477,7 @@ sub run {
         reboot_on_changes;
     } elsif (!get_var('KGRAFT')) {
         power_action('reboot', textmode => 1);
-        $self->wait_boot if get_var('LTP_BAREMETAL');
+        $self->wait_boot if (get_var('FORCE_SERIAL_TERMINAL') || get_var('LTP_BAREMETAL'));
     }
 }
 
