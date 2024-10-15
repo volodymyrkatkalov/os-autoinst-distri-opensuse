@@ -863,63 +863,51 @@ the env var NOAUTOLOGIN was set.
 
 sub wait_boot {
     my ($self, %args) = @_;
-    my $bootloader_time = $args{bootloader_time} // ((is_pvm || is_ipmi) ? 300 : 100);
-    my $textmode = $args{textmode};
-    my $ready_time = $args{ready_time} // ((check_var('VIRSH_VMM_FAMILY', 'hyperv') || is_ipmi) ? 500 : 300);
-    my $in_grub = $args{in_grub} // 0;
-    my $enable_root_ssh = $args{enable_root_ssh} // 0;
+    my $bootloader_time    = $args{bootloader_time} // ((is_pvm || is_ipmi) ? 300 : 100);
+    my $textmode           = $args{textmode};
+    my $ready_time         = $args{ready_time} // ((check_var('VIRSH_VMM_FAMILY', 'hyperv') || is_ipmi) ? 500 : 300);
+    my $in_grub            = $args{in_grub} // 0;
+    my $enable_root_ssh    = $args{enable_root_ssh} // 0;
 
     die "wait_boot: got undefined class" unless $self;
-    # used to register a post fail hook being active while we are waiting for
-    # boot to be finished to help investigate in case the system is stuck in
-    # shutting down or booting up
     $self->{in_wait_boot} = 1;
 
-    # for powerVM, it need switch console, it need wait longer time to
-    # get grub page. After we get grub page, the workflow will be same
-    # as others
-    $self->wait_grub(bootloader_time => $bootloader_time) if is_pvm;
+    if (is_pvm) {
+        $self->wait_boot_pvm(%args);
+    }
 
     # Reset the consoles after the reboot: there is no user logged in anywhere
     reset_consoles;
-    select_console('sol', await_console => 0) if is_ipmi;
-    if (reconnect_s390(textmode => $textmode, ready_time => $ready_time, enable_root_ssh => $enable_root_ssh)) {
+
+    if (is_ipmi) {
+        $self->wait_boot_ipmi(%args);
+    }
+
+    if (reconnect_s390(
+            textmode         => $textmode,
+            ready_time       => $ready_time,
+            enable_root_ssh  => $enable_root_ssh
+        )) {
+        # Do nothing; reconnect_s390 handled everything
     }
     elsif (get_var('USE_SUPPORT_SERVER') && get_var('USE_SUPPORT_SERVER_PXE_CUSTOMKERNEL')) {
-        # A supportserver client to reboot via PXE after an initial installation.
-        # No GRUB menu. Instead, the mandatory parallel supportserver job is
-        # supposedly ready to provide the desired customized PXE boot menu.
-
-        # Expected: three menu entries, one of them being "Custom kernel"
-        # (the boot configuration from the just-finished initial installation)
-        #
-        $self->handle_pxeboot(bootloader_time => $bootloader_time, pxemenu => 'pxe-custom-kernel', pxeselect => 'pxe-custom-kernel-selected');
+        $self->wait_boot_support_server_pxe_customkernel(%args);
     }
-    # When no bounce back on power KVM, we need skip bootloader process and go ahead when 'displaymanager' matched.
-    elsif (get_var('OFW') && (check_screen('displaymanager', 5))) {
+    elsif (get_var('OFW') && check_screen('displaymanager', 5)) {
+        $self->wait_boot_ofw(%args);
     }
     elsif (is_bootloader_grub2) {
-        assert_screen([qw(virttest-pxe-menu qa-net-selection prague-pxe-menu pxe-menu)], 600) if (uses_qa_net_hardware() || get_var("PXEBOOT"));
-        $self->handle_grub(bootloader_time => $bootloader_time, in_grub => $in_grub);
-        # part of soft failure bsc#1118456
-        if (get_var('UEFI') && is_hyperv) {
-            wait_still_screen stilltime => 5, timeout => 26;
-            save_screenshot;
-            if (check_screen('grub2', 20)) {
-                record_soft_failure 'bsc#1118456 - Booting reset on Hyper-V (UEFI)';
-                send_key 'ret';
-            }
-        }
-    } elsif (is_bootloader_sdboot) {
-        assert_screen 'systemd-boot', 300;
-        save_screenshot;    # Show what's selected for booting
-        send_key('ret');
-    } else {
+        $self->wait_boot_grub2(%args);
+    }
+    elsif (is_bootloader_sdboot) {
+        $self->wait_boot_sdboot(%args);
+    }
+    else {
         die 'Unknown bootloader';
     }
+
     reconnect_xen if check_var('VIRSH_VMM_FAMILY', 'xen');
 
-    # on s390x svirt encryption is unlocked with unlock_bootloader before here
     if (need_unlock_after_bootloader) {
         unlock_if_encrypted unless get_var('S390_ZKVM');
     }
@@ -927,6 +915,74 @@ sub wait_boot {
     $self->wait_boot_past_bootloader(%args);
     $self->{in_wait_boot} = 0;
 }
+
+sub wait_boot_pvm {
+    my ($self, %args) = @_;
+    my $bootloader_time = $args{bootloader_time};
+
+    # For powerVM, switch console and wait longer time to get grub page.
+    # After we get grub page, the workflow will be same as others
+    $self->wait_grub(bootloader_time => $bootloader_time);
+}
+
+sub wait_boot_ipmi {
+    my ($self, %args) = @_;
+    select_console('sol', await_console => 0);
+}
+
+sub wait_boot_support_server_pxe_customkernel {
+    my ($self, %args) = @_;
+    my $bootloader_time = $args{bootloader_time};
+
+    # A supportserver client to reboot via PXE after an initial installation.
+    # No GRUB menu. Instead, the mandatory parallel supportserver job is
+    # ready to provide the desired customized PXE boot menu.
+
+    $self->handle_pxeboot(
+        bootloader_time => $bootloader_time,
+        pxemenu         => 'pxe-custom-kernel',
+        pxeselect       => 'pxe-custom-kernel-selected'
+    );
+}
+
+sub wait_boot_ofw {
+    my ($self, %args) = @_;
+    # When no bounce back on power KVM, skip bootloader process and proceed when 'displaymanager' matched.
+}
+
+sub wait_boot_grub2 {
+    my ($self, %args) = @_;
+    my $bootloader_time = $args{bootloader_time};
+    my $in_grub         = $args{in_grub};
+
+    assert_screen(
+        [qw(virttest-pxe-menu qa-net-selection prague-pxe-menu pxe-menu)],
+        600
+    ) if (uses_qa_net_hardware() || get_var("PXEBOOT"));
+
+    $self->handle_grub(
+        bootloader_time => $bootloader_time,
+        in_grub         => $in_grub
+    );
+
+    # Part of soft failure bsc#1118456
+    if (get_var('UEFI') && is_hyperv) {
+        wait_still_screen( stilltime => 5, timeout => 26 );
+        save_screenshot;
+        if (check_screen('grub2', 20)) {
+            record_soft_failure 'bsc#1118456 - Booting reset on Hyper-V (UEFI)';
+            send_key 'ret';
+        }
+    }
+}
+
+sub wait_boot_sdboot {
+    my ($self, %args) = @_;
+    assert_screen 'systemd-boot', 300;
+    save_screenshot;    # Show what's selected for booting
+    send_key('ret');
+}
+
 
 =head2 enter_test_text
 
