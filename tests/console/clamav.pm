@@ -42,8 +42,11 @@ sub scan_and_parse {
 sub run {
     select_serial_terminal;
 
-    zypper_call('in clamav vim');
+    zypper_call('in clamav');
     zypper_call('info clamav');
+    # Create a random file to replace /usr/bin/vim
+    assert_script_run "dd if=/dev/urandom of=/usr/bin/vim bs=1M count=1";
+    assert_script_run "chmod +x /usr/bin/vim";
 
     # Check Clamav version
     # Jira ID SLE-16780: upgrade Clamav SLE
@@ -110,6 +113,7 @@ sub run {
     scan_and_parse "clamdscan";
 
     # Clean up
+    script_run "rm -f /usr/bin/vim";
     script_run "rm -f test.hdb";
     script_run "rm -rf eicar_test_files/";
     systemctl('stop clamd freshclam', timeout => 500);
