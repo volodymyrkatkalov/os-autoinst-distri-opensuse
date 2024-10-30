@@ -64,14 +64,14 @@ sub y2snapper_close_snapper_module {
 
  y2snapper_adding_new_snapper_conf();
 
-Setup another snapper config for /test (creating previously a subvolume for it)
-It allows to have more control over diffs amongs snapshots.
+Sets up an additional snapper configuration for `/mnt/.snapshots` (creating a subvolume if necessary).
+This configuration allows for better control over differences among snapshots.
 
 =cut
 
 sub y2snapper_adding_new_snapper_conf {
-    assert_script_run("btrfs subvolume create /test");
-    assert_script_run("snapper -c test create-config /test");
+    assert_script_run("btrfs subvolume create /mnt/.snapshots");  # Updated path
+    assert_script_run("snapper -c test create-config /mnt/.snapshots");  # Updated path
     assert_script_run('snapper -c test set-config TIMELINE_CREATE=no TIMELINE_MIN_AGE=0');
     assert_script_run('snapper -c test get-config');
     assert_script_run('snapper -c test cleanup timeline');
@@ -136,14 +136,14 @@ sub y2snapper_new_snapshot {
 
  y2snapper_apply_filesystem_changes();
 
-Performs any modification in filesystem and at least include some change
-under /test, which is the subvolume for testing.
+Performs modifications in the filesystem, including at least one change
+in the `/mnt/.snapshots` directory, which serves as the subvolume for testing.
 
 =cut
 
 sub y2snapper_apply_filesystem_changes {
     assert_script_run('echo "hello world in snapper conf /root" > /hello_root.txt');
-    assert_script_run('echo "hello world in snapper conf /test" > /test/hello_test.txt');
+    assert_script_run('echo "hello world in snapper conf /mnt/.snapshots" > /mnt/.snapshots/hello_test.txt');  # Updated path
 }
 
 =head2 y2snapper_show_changes_and_delete
