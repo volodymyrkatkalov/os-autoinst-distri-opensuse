@@ -1553,6 +1553,10 @@ sub load_extra_tests_texlive {
 }
 
 sub load_extra_tests_openqa_bootstrap {
+    if (get_var('SELINUX')) {
+        loadtest 'transactional/enable_selinux' if is_micro;
+        loadtest 'installation/enable_selinux' unless is_micro;
+    }
     loadtest 'x11/disable_screensaver';
     if (get_var 'BOOTSTRAP_CONTAINER') {
         loadtest 'openqa/install/openqa_bootstrap_container';
