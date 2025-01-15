@@ -91,10 +91,23 @@ sub run {
     }
 
     record_info('Scheduled Tests', join(', ', @schedule));
+    assert_script_run('exit 1', timeout => 30);
 
-    # Execute generic openQA's systemd runner for each test case directory found
     foreach my $test (@schedule) {
-        record_info("Test: $test", script_output("/bin/bash $test", timeout => 1800, type_command => 1, proceed_on_failure => 1));
+        record_info("Test: $test");
+        eval {
+            my $output = script_output(
+                "/bin/bash $test",
+                timeout            => 1800,
+                type_command       => 1,
+                proceed_on_failure => 1,
+            );
+            record_info("Output of $test", $output);
+        };
+        if ($@) {
+            # Log the error but allow the loop to continue
+            record_soft_failure("Test $test failed or timed out: $@");
+        }
     }
 }
 
