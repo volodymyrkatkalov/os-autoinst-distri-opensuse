@@ -17,8 +17,15 @@ use strict;
 use warnings;
 use testapi;
 use lockapi;
+use utils qw(zypper_call script_retry validate_script_output_retry);
 
 sub run {
+    select_console 'root-console';
+    zypper_call('in --force-resolution --solver-focus Update rsync');
+    # assert_script_run('setenforce 0');
+    assert_script_run('setsebool -P rsync_full_access 1');
+    # assert_script_run('semanage permissive -a rsync_t');
+
     select_console 'user-console';
 
     #waiting for configuration of rsync server

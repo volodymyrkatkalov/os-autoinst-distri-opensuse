@@ -17,6 +17,7 @@ use strict;
 use warnings;
 use testapi;
 use lockapi;
+use utils qw(zypper_call script_retry validate_script_output_retry);
 use version_utils;
 
 
@@ -25,6 +26,11 @@ sub run {
     barrier_create('rsync_finished', 2);
     mutex_create 'barrier_setup_done';
     select_console 'root-console';
+
+    zypper_call('in --force-resolution --solver-focus Update rsync');
+    # assert_script_run('setenforce 0');
+    assert_script_run('setsebool -P rsync_full_access 1');
+    # assert_script_run('semanage permissive -a rsync_t');
 
     #preparation of rsync config files
     assert_script_run('curl -v -o /etc/rsyncd.conf ' . data_url('console/rsyncd.conf'));
