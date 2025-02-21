@@ -113,7 +113,7 @@ resource "google_compute_instance" "openqa" {
   count        = var.instance_count
   name         = "${var.name}-${element(random_id.service.*.hex, count.index)}"
   machine_type = var.type
-  zone         = var.region
+  region       = var.region
 
   guest_accelerator {
     type  = "nvidia-tesla-t4"
