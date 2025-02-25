@@ -22,6 +22,8 @@ our @EXPORT = qw(load_publiccloud_tests load_publiccloud_download_repos);
 sub load_maintenance_publiccloud_tests {
     my $args = OpenQA::Test::RunArgs->new();
 
+    my $selinux_collection_done = 0;
+
     loadtest "publiccloud/download_repos";
     loadtest "publiccloud/prepare_instance", run_args => $args;
     if (get_var('PUBLIC_CLOUD_REGISTRATION_TESTS')) {
@@ -69,9 +71,12 @@ sub load_maintenance_publiccloud_tests {
             die "ConfigError: Either the provider is not supported or SLE version is old!\n" unless (check_var('PUBLIC_CLOUD_PROVIDER', 'GCE') && is_sle('15-SP4+'));
             loadtest "publiccloud/nvidia", run_args => $args;
         }
+        loadtest("publiccloud/selinux_diag", run_args => $args);
+        $selinux_collection_done = 1;
 
         loadtest("publiccloud/ssh_interactive_end", run_args => $args) unless get_var('PUBLIC_CLOUD_XFS');
     }
+    loadtest("publiccloud/selinux_diag", run_args => $args) unless $selinux_collection_done;
 }
 
 sub load_publiccloud_consoletests {
@@ -108,6 +113,9 @@ my $should_use_runargs = sub {
 
 sub load_latest_publiccloud_tests {
     my $args = OpenQA::Test::RunArgs->new();
+
+    my $selinux_collection_done = 0;
+
     if (get_var('PUBLIC_CLOUD_IMG_PROOF_TESTS')) {
         loadtest "publiccloud/img_proof", run_args => $args;
     }
@@ -160,6 +168,9 @@ sub load_latest_publiccloud_tests {
             } elsif (get_var('PUBLIC_CLOUD_AZURE_NFS_TEST')) {
                 loadtest("publiccloud/azure_nfs", run_args => $args);
             }
+            loadtest("publiccloud/selinux_diag", run_args => $args);
+            $selinux_collection_done = 1;
+
             loadtest("publiccloud/ssh_interactive_end", run_args => $args) unless get_var('PUBLIC_CLOUD_XFS');
         }
     }
@@ -168,6 +179,8 @@ sub load_latest_publiccloud_tests {
     } else {
         die "*publiccloud - Latest* expects PUBLIC_CLOUD_* job variable. None is matched from the expected ones.";
     }
+
+    loadtest("publiccloud/selinux_diag", run_args => $args) unless $selinux_collection_done;
 }
 
 sub load_create_publiccloud_tools_image {
