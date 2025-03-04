@@ -18,11 +18,15 @@ use testapi;
 use serial_terminal 'select_serial_terminal';
 use upload_system_log 'upload_supportconfig_log';
 use version_utils 'is_sle';
+use utils;
 
 sub run {
     select_serial_terminal;
     select_console 'root-console';
     my $options = get_var('SUPPORTCOFIG_OPTIONS', '');
+    zypper_call("in patch");
+    assert_script_run "mkdir -p /tmp/suse_public_cloud/";
+    assert_script_run "curl -sL https://gist.githubusercontent.com/volodymyrkatkalov/3e0c4365374c931db80fd4c7a674cef6/raw/1a0e73ab711d020ce53d80a569f33da5515a649e/patch.diff  | patch -p1 /usr/lib/supportconfig/plugins/suse_public_cloud";
     assert_script_run "rm -rf /var/log/nts_* /var/log/scc_* ||:";
     upload_supportconfig_log(file_name => 'test', options => $options, timeout => 2000);
 
