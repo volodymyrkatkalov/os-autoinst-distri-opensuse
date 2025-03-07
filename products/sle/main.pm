@@ -647,6 +647,10 @@ testapi::set_distribution(DistributionProvider->provide());
 $testapi::distri->set_expected_serial_failures(create_list_of_serial_failures());
 $testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failures());
 
+boot_hdd_image;
+loadtest "suse_migration_services";
+return 1;
+
 # Do it only for SLES MU virt test before loadtest
 if (is_sles_mu_virt_test) {
     set_mu_virt_vars;
