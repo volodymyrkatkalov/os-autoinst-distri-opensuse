@@ -390,6 +390,9 @@ sub wait_for_ssh {
     $args{systemup_check} //= not $args{wait_stop};
     $args{logs} //= 1;
     $args{public_ip} //= $self->public_ip();
+    my $MIN_TIMEOUT = 10;
+    my $MAX_TIMEOUT = 100;
+
     # DMS migration (tests/publiccloud/migration.pm) is running under user "migration"
     # until it is not over we will receive "ssh permission denied (pubkey)" error
     # but it is not good reason to die early because after it will be over
@@ -432,11 +435,24 @@ sub wait_for_ssh {
     my $retry = 0;    # count retries of unexpected sysout
     if ($args{systemup_check} and isok($exit_code)) {
         my $ssh_opts = $self->ssh_opts() . ' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlPath=none';
+        my $attempt = 0;
+
         while (($duration = time() - $start_time) < $args{timeout}) {
+            $attempt++;
+            # Constrain timeout between MIN_TIMEOUT and MAX_TIMEOUT
+            my $attempt_timeout = $args{timeout} - $duration;
+            $attempt_timeout = $MIN_TIMEOUT if $attempt_timeout < $MIN_TIMEOUT;
+            $attempt_timeout = $MAX_TIMEOUT if $attempt_timeout > $MAX_TIMEOUT;
+            # my $attempt_timeout = $args{timeout} - $duration;
+
+            record_info("SSH Attempt for systemctl is-system-running #$attempt", "Attempt #$attempt: timeout=$attempt_timeout sec, duration=$duration sec, total timeout=$args{timeout} sec");
+
             # timeout recalculated removing consumed time until now
             # We don't support password authentication so it would just block the terminal
             $sysout = $self->ssh_script_output(cmd => 'sudo systemctl is-system-running', ssh_opts => $ssh_opts,
-                timeout => $args{timeout} - $duration, proceed_on_failure => 1, username => $args{username});
+                timeout => $attempt_timeout, proceed_on_failure => 1, username => $args{username});
+            # $sysout = $self->ssh_script_output(cmd => 'sudo systemctl is-system-running', ssh_opts => $ssh_opts,
+            #     timeout => $args{timeout} - $duration, proceed_on_failure => 1, username => $args{username});
             # result check
             if ($sysout =~ m/initializing|starting/) {    # still starting
                 $exit_code = undef;
