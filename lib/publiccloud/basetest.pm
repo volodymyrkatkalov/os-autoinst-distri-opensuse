@@ -101,6 +101,29 @@ sub cleanup {
     return 1;
 }
 
+sub is_selinux_enabled {
+    my ($self, $instance) = @_;
+    
+    # Get kernel command line
+    my $cmdline = $instance->ssh_script_output('cat /proc/cmdline', timeout => 0, quiet => 1);
+    
+    # SELinux checks
+    my $selinux_disabled = $cmdline && $cmdline =~ /selinux=0/;
+    my $security_selinux = $cmdline && $cmdline =~ /security=selinux/;
+    my $selinux_dir_exists = $instance->ssh_script_run('stat /sys/kernel/security/selinux', timeout => 0, quiet => 1) == 0;
+    
+    # SELinux is enabled if not disabled and either directory exists or security=selinux is set
+    return !$selinux_disabled && ($selinux_dir_exists || $security_selinux);
+}
+
+sub run {
+    my ($self, $args) = @_;
+    my $instance = $args->{my_instance};
+    my $provider = $args->{my_provider};
+
+    upload_selinux_denials($instance) if is_selinux_enabled($instance);
+}
+
 sub _cleanup {
     my ($self) = @_;
     die("Cleanup called twice!") if ($self->{cleanup_called});
@@ -160,6 +183,21 @@ sub _upload_logs {
     return unless $self->{run_args} && $self->{run_args}->{my_instance};
 
     my @instance_logs = ('/var/log/cloudregister', '/etc/hosts', '/var/log/zypper.log', '/etc/zypp/credentials.d/SCCcredentials');
+
+    if ($self->is_selinux_enabled($self->{run_args}->{my_instance})) {
+        my $denials = $self->{run_args}->{my_instance}->ssh_script_output(
+            'command -v ausearch >/dev/null 2>&1 && sudo ausearch -m avc,user_avc,selinux_err,user_selinux_err -ts today --raw || dmesg | grep -i "selinux.*denied"',
+            timeout => 0,
+            quiet => 1
+        );
+        
+        if ($denials && $denials !~ /^\s*$/) {    # Check for non-empty output
+            my $log_file = "/tmp/selinux_denials.txt";
+            $self->{run_args}->{my_instance}->ssh_script_run("echo '$denials' > $log_file", timeout => 0, quiet => 1);
+            push @instance_logs, $log_file;  # Add to the array for unified handling
+        }
+    }
+
     for my $instance_log (@instance_logs) {
         $self->{run_args}->{my_instance}->ssh_script_run("sudo chmod a+r " . $instance_log, timeout => 0, quiet => 1);
         $self->{run_args}->{my_instance}->upload_log($instance_log, failok => 1, log_name => $instance_log . ".txt");
