@@ -162,6 +162,10 @@ sub json_to_xml {
     $dom->toFile(hashed_string('aitl_results.xml'), 1);
 }
 
+sub _upload_logs {
+    # because it is AITL where we don't create actual instance no point to call _upload_logs
+}
+
 sub _cleanup {
     # because it is AITL where we don't create actual instance no point to call _cleanup
 }
