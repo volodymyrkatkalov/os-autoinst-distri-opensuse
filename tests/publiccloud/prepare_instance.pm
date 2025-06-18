@@ -57,6 +57,11 @@ sub run {
 
     # We expect that the testapi user (typically 'bernhard') is allowed to run sudo commands
     $instance->ssh_assert_script_run("echo \"$testapi::username ALL=(ALL) ALL\" | sudo tee /etc/sudoers.d/010_openqa");
+
+
+    record_info('lsblk', $instance->run_ssh_command(cmd => q(lsblk)));
+    record_info('free -h', $instance->run_ssh_command(cmd => q(free -h)));
+    record_info('vmstat -s', $instance->run_ssh_command(cmd => q(vmstat -s)));
 }
 
 sub test_flags {
