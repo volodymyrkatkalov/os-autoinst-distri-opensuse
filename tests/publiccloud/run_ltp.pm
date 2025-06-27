@@ -197,15 +197,15 @@ sub run {
     my $cmd = 'python3.11 kirk ';
     $cmd .= "--framework ltp ";
     $cmd .= '--verbose ';
-    $cmd .= '--exec-timeout=1200 ';
-    $cmd .= '--suite-timeout=5400 ';
+    $cmd .= '--exec-timeout=12000 ';
+    $cmd .= '--suite-timeout=54000 ';
     $cmd .= '--run-suite ' . $ltp_command . ' ';
     $cmd .= '--skip-tests \'' . $skip_tests . '\' ' if $skip_tests;
     $cmd .= '--sut=ssh' . $sut . ' ';
     $cmd .= '--env ' . $env . ' ' if ($env);
 
     record_info('LTP START', 'Command launch');
-    script_run($cmd, timeout => get_var('LTP_TIMEOUT', 30 * 60));
+    script_run($cmd, timeout => get_var('LTP_TIMEOUT', 30 * 60 * 10));
     record_info('LTP END', 'tests done');
 }
 

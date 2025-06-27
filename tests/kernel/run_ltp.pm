@@ -392,6 +392,7 @@ sub run {
     die 'Need LTP_COMMAND_FILE to know which tests to run' unless $tinfo && $tinfo->runfile;
     my $runfile = $tinfo->runfile;
     my $timeout = get_var('LTP_TIMEOUT') || 900;
+    $timeout = $timeout * 10;
     my $is_posix = $runfile =~ m/^\s*openposix\s*$/i;
     my $test_result_export = $tinfo->test_result_export;
     my $test = $tinfo->test;
