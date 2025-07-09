@@ -28,10 +28,14 @@ sub firewall_block_dhcp {
     my @nics = @$nics_ref;
     my $nic0 = $nics[0];
 
+    assert_script_run("iptables -A INPUT -i $nic0 -p udp --dport 67 -j DROP");
     assert_script_run("iptables -A INPUT -i $nic0 -p udp --dport 68 -j DROP");
     assert_script_run("iptables -A OUTPUT -o $nic0 -p udp --dport 67 -j DROP");
-    assert_script_run("iptables -A FORWARD -p udp -d $nic0 --dport 67 -j DROP");
-    assert_script_run("iptables -A FORWARD -p udp -s $nic0 --sport 68 -j DROP");
+    assert_script_run("iptables -A OUTPUT -o $nic0 -p udp --dport 68 -j DROP");
+    assert_script_run("iptables -A FORWARD -i eth0 -p udp --dport 67 -j DROP");
+    assert_script_run("iptables -A FORWARD -i eth0 -p udp --sport 67 -j DROP");
+    assert_script_run("iptables -A FORWARD -i eth0 -p udp --sport 67 -j DROP");
+    assert_script_run("iptables -A FORWARD -i eth0 -p udp --dport 67 -j DROP");
     record_info("Firewall rules", script_output("iptables -L -n -v --line-numbers"));
 }
 
