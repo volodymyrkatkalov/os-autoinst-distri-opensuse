@@ -590,7 +590,7 @@ This function determines if the test is running in an isolated network setup by 
 =cut
 
 sub is_running_in_isolated_network {
-    return check_var('NICTYPE', 'tap') && get_var('NICVLAN');
+    return check_var('NICTYPE', 'user');
 }
 
 =head2 get_default_dns

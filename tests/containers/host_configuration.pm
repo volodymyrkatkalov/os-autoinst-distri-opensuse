@@ -23,6 +23,18 @@ use containers::utils qw(reset_container_network_if_needed);
 use containers::k8s qw(install_k3s);
 use transactional qw(trup_call process_reboot);
 
+sub firewall_block_dhcp {
+    my ($self, $nics_ref) = @_;
+    my @nics = @$nics_ref;
+    my $nic0 = $nics[0];
+
+    assert_script_run("iptables -A INPUT -i $nic0 -p udp --dport 68 -j DROP");
+    assert_script_run("iptables -A OUTPUT -o $nic0 -p udp --dport 67 -j DROP");
+    assert_script_run("iptables -A FORWARD -p udp -d $nic0 --dport 67 -j DROP");
+    assert_script_run("iptables -A FORWARD -p udp -s $nic0 --sport 68 -j DROP");
+    record_info("Firewall rules", script_output("iptables -L -n -v --line-numbers"));
+}
+
 sub setup_networking_in_isolated_network {
     my ($self, $nics_ref) = @_;
     my @nics = @$nics_ref;
@@ -53,6 +65,8 @@ sub setup_networking_in_isolated_network {
             duplex => 'full',
             autoneg => 'off'
     });
+
+    firewall_block_dhcp($self, \@nics);
 }
 
 sub run {
