@@ -24,6 +24,102 @@ use version_utils;
 
 our $root_dir = '/root';
 
+sub should_build_ltp {
+    return get_var('PUBLIC_CLOUD_LTP_GIT_BUILD', 0);    # 1 if env var is set, otherwise 0
+}
+
+sub get_available_packages_remote {
+    my ($self, $instance, $packages_ref) = @_;
+
+    my @available;
+    foreach my $pkg (@$packages_ref) {
+        my $out = $instance->run_ssh_command(
+            cmd => "zypper -n info $pkg",
+            proceed_on_failure => 1
+        );
+        # Package is available if output does NOT contain "not found"
+        if ($out !~ /package\s+'?\Q$pkg\E'?\s+not found|No\s+matching\s+items\s+found/i) {
+            push @available, $pkg;
+        }
+    }
+    return \@available;
+}
+
+sub zypper_install {
+    my ($self, $instance, $packages_ref) = @_;
+    $instance->run_ssh_command(cmd => "sudo zypper -n in --no-recommends " . join(' ', @$packages_ref), timeout => 600);
+}
+
+sub zypper_install_available_remote {
+    my ($self, $instance, $packages_ref) = @_;
+    my $available_ref = $self->get_available_packages_remote($instance, $packages_ref);
+    return unless @$available_ref;
+    $self->zypper_install($instance, $available_ref);
+}
+
+sub install_build_deps {
+    my ($self, $instance) = @_;
+
+    my @deps = qw(
+      autoconf
+      automake
+      bison
+      expect
+      flex
+      gcc
+      git-core
+      libaio-devel
+      libopenssl-devel
+      make
+    );
+
+    $self->zypper_install($instance, \@deps);
+
+    my @maybe_deps = qw(
+      keyutils-devel
+      libcap-devel
+      libacl-devel
+      libtirpc-devel
+      libselinux-devel
+      gcc-32bit
+      kernel-default-devel-32bit
+      keyutils-devel-32bit
+      libacl-devel-32bit
+      libaio-devel-32bit
+      libcap-devel-32bit
+      libmnl-devel
+      libnuma-devel
+      libnuma-devel-32bit
+      libselinux-devel-32bit
+      libtirpc-devel-32bit
+    );
+    push @maybe_deps, 'libopenssl-devel-32bit' if !is_sle('<15');
+
+    $self->zypper_install_available_remote($instance, \@maybe_deps);
+}
+
+sub build_ltp_from_github {
+    my ($self, $instance) = @_;
+
+    my $start = time();
+
+    my $repo_url = get_var('LTP_GIT_URL', 'https://github.com/linux-test-project/ltp');
+    my $repo_branch = get_var('LTP_RELEASE', 'master');
+    my $ltp_dir = '/tmp/ltp';
+    my $ltp_build_timeout = 20 * 60;    # 10 minutes
+
+    $self->install_build_deps($instance);
+
+    $instance->run_ssh_command("rm -rf $ltp_dir");
+    $instance->run_ssh_command("git clone --depth 1 -b $repo_branch $repo_url $ltp_dir");
+    $instance->run_ssh_command(
+        cmd => "cd $ltp_dir && make autotools && ./configure && make -j\$(nproc) && sudo make install",
+        timeout => $ltp_build_timeout
+    );
+
+    record_info("LTP Build Time", "Time taken to build LTP from source: " . (time() - $start) . " seconds");
+}
+
 sub get_ltp_rpm
 {
     my ($url) = @_;
@@ -103,22 +199,70 @@ sub run {
 
     select_host_console();
 
+    ($args->{my_provider}, $args->{my_instance}) = $self->prepare_instance($args);
+
+    my $instance = $args->{my_instance};
+    my $provider = $args->{my_provider};
+
+    $self->prepare_scripts();
+    $self->register_instance($instance, $qam);
+
+    if (should_build_ltp()) {
+        $self->build_ltp_from_github($instance);
+    } else {
+        $self->install_ltp($instance, $ltp_repo);
+    }
+
+    my $ltp_pkg = get_var('LTP_PKG', 'ltp-stable');
+    my $ltp_env = gen_ltp_env($instance, $ltp_pkg);
+    $self->{ltp_env} = $ltp_env;
+
+    my $skip_tests = $self->prepare_skip_tests(\@commands, $ltp_env, $ltp_exclude);
+
+    $self->prepare_kirk($instance);
+
+    $self->upload_runtest($instance, $provider);
+
+    $self->printk_loglevel($instance);
+
+    my $reset_cmd = $root_dir . '/restart_instance.sh ' . instance_log_args($provider, $instance);
+    my $log_start_cmd = $root_dir . '/log_instance.sh start ' . instance_log_args($provider, $instance);
+
+    my $env = get_var('LTP_PC_RUNLTP_ENV');
+    $self->prepare_logging($log_start_cmd);
+
+    my $cmd = $self->run_ltp($instance, $provider, $reset_cmd, $ltp_command, $skip_tests, $env);
+
+    record_info('LTP START', 'Command launch');
+    script_run($cmd, timeout => get_var('LTP_TIMEOUT', 30 * 60));
+    record_info('LTP END', 'tests done');
+}
+
+sub prepare_instance {
+    my ($self, $args) = @_;
     unless ($args->{my_provider} && $args->{my_instance}) {
         $args->{my_provider} = $self->provider_factory();
         $args->{my_instance} = $args->{my_provider}->create_instance(check_guestregister => is_openstack ? 0 : 1);
     }
-    my $instance = $args->{my_instance};
-    my $provider = $args->{my_provider};
+    return ($args->{my_provider}, $args->{my_instance});
+}
 
+sub prepare_scripts {
     assert_script_run("cd $root_dir");
     assert_script_run('curl ' . data_url('publiccloud/restart_instance.sh') . ' -o restart_instance.sh');
     assert_script_run('curl ' . data_url('publiccloud/log_instance.sh') . ' -o log_instance.sh');
     assert_script_run('chmod +x restart_instance.sh');
     assert_script_run('chmod +x log_instance.sh');
+}
 
+sub register_instance {
+    my ($self, $instance, $qam) = @_;
     registercloudguest($instance) if (is_byos() && !$qam);
     register_openstack($instance) if is_openstack;
+}
 
+sub install_ltp {
+    my ($self, $instance, $ltp_repo) = @_;
     $instance->run_ssh_command(cmd => 'sudo zypper -n addrepo -fG ' . $ltp_repo . ' ltp_repo', timeout => 600);
     my $ltp_pkg = get_var('LTP_PKG', 'ltp-stable');
     if (is_transactional) {
@@ -127,17 +271,16 @@ sub run {
     } else {
         $instance->run_ssh_command(cmd => "sudo zypper -n in $ltp_pkg", timeout => 600);
     }
-    my $ltp_env = gen_ltp_env($instance, $ltp_pkg);
-    $self->{ltp_env} = $ltp_env;
+}
 
-
-    # Use lib/LTP/WhiteList module to exclude tests
+sub prepare_skip_tests {
+    my ($self, $commands, $ltp_env, $ltp_exclude) = @_;
     my $issues = get_var('LTP_KNOWN_ISSUES', '');
     my $skip_tests;
     if ($issues) {
         my $whitelist = LTP::WhiteList->new($issues);
         my @skipped;
-        foreach my $command (@commands) {
+        foreach my $command (@$commands) {
             my @skipped_for_command = $whitelist->list_skipped_tests($ltp_env, $command);
             push @skipped, @skipped_for_command;
         }
@@ -152,7 +295,11 @@ sub run {
     } else {
         record_info("Exclude", "None");
     }
+    return $skip_tests;
+}
 
+sub prepare_kirk {
+    my ($self, $instance) = @_;
     my $kirk_repo = get_var("LTP_RUN_NG_REPO", "https://github.com/linux-test-project/kirk.git");
     my $kirk_branch = get_var("LTP_RUN_NG_BRANCH", "master");
     record_info('LTP RUNNER REPO', "Repo: " . $kirk_repo . "\nBranch: " . $kirk_branch);
@@ -160,26 +307,10 @@ sub run {
     $instance->run_ssh_command(cmd => 'sudo CREATE_ENTRIES=1 ' . get_ltproot() . '/IDcheck.sh', timeout => 300);
     record_info('Kernel info', $instance->run_ssh_command(cmd => q(rpm -qa 'kernel*' --qf '%{NAME}\n' | sort | uniq | xargs rpm -qi)));
     if (get_var('PUBLIC_CLOUD_INSTANCE_TYPE') =~ /-metal$/) {
-        # The metal detector fails on GCP because it may return "google"
         record_info('VM type', $instance->run_ssh_command(cmd => '! systemd-detect-virt')) unless is_gce;
     } else {
         record_info('VM type', $instance->run_ssh_command(cmd => 'systemd-detect-virt'));
     }
-
-    assert_script_run('curl ' . data_url('publiccloud/ltp_runtest') . ' -o publiccloud');
-    $instance->scp("publiccloud", 'remote:/tmp/publiccloud', 9999);
-    $instance->ssh_assert_script_run(cmd => "sudo mv /tmp/publiccloud /opt/ltp/runtest/publiccloud");
-
-    # this will print /all/ kernel messages to the console. So in case kernel panic we will have some data to analyse
-    $instance->ssh_assert_script_run(cmd => "echo 1 | sudo tee /sys/module/printk/parameters/ignore_loglevel");
-
-    my $reset_cmd = $root_dir . '/restart_instance.sh ' . instance_log_args($provider, $instance);
-    my $log_start_cmd = $root_dir . '/log_instance.sh start ' . instance_log_args($provider, $instance);
-
-    my $env = get_var('LTP_PC_RUNLTP_ENV');
-
-    assert_script_run($log_start_cmd);
-
     assert_script_run("cd kirk");
     my $ghash = script_output("git rev-parse HEAD", proceed_on_failure => 1);
     set_var("LTP_RUN_NG_GIT_HASH", $ghash);
@@ -187,7 +318,27 @@ sub run {
     assert_script_run("python3.11 -m venv env311");
     assert_script_run("source env311/bin/activate");
     assert_script_run("pip3.11 install asyncssh msgpack");
+}
 
+sub upload_runtest {
+    my ($self, $instance, $provider) = @_;
+    assert_script_run('curl ' . data_url('publiccloud/ltp_runtest') . ' -o publiccloud');
+    $instance->scp("publiccloud", 'remote:/tmp/publiccloud', 9999);
+    $instance->ssh_assert_script_run(cmd => "sudo mv /tmp/publiccloud /opt/ltp/runtest/publiccloud");
+}
+
+sub printk_loglevel {
+    my ($self, $instance) = @_;
+    $instance->ssh_assert_script_run(cmd => "echo 1 | sudo tee /sys/module/printk/parameters/ignore_loglevel");
+}
+
+sub prepare_logging {
+    my ($self, $log_start_cmd) = @_;
+    assert_script_run($log_start_cmd);
+}
+
+sub run_ltp {
+    my ($self, $instance, $provider, $reset_cmd, $ltp_command, $skip_tests, $env) = @_;
     my $sut = ':user=' . $instance->username;
     $sut .= ':sudo=1';
     $sut .= ':key_file=$(realpath ' . $instance->provider->ssh_key . ')';
@@ -203,10 +354,7 @@ sub run {
     $cmd .= '--skip-tests \'' . $skip_tests . '\' ' if $skip_tests;
     $cmd .= '--sut=ssh' . $sut . ' ';
     $cmd .= '--env ' . $env . ' ' if ($env);
-
-    record_info('LTP START', 'Command launch');
-    script_run($cmd, timeout => get_var('LTP_TIMEOUT', 30 * 60));
-    record_info('LTP END', 'tests done');
+    return $cmd;
 }
 
 sub cleanup {
@@ -230,6 +378,10 @@ sub cleanup {
 
 sub gen_ltp_env {
     my ($instance, $ltp_pkg) = @_;
+    my $ltp_version = get_var('LTP_RELEASE', 'master');
+    unless (should_build_ltp()) {
+        $ltp_version = $instance->run_ssh_command(cmd => qq(rpm -q --qf '%{VERSION}\n' $ltp_pkg));
+    }
     my $environment = {
         product => get_required_var('DISTRI') . ':' . get_required_var('VERSION'),
         revision => get_required_var('BUILD'),
@@ -237,7 +389,7 @@ sub gen_ltp_env {
         kernel => $instance->run_ssh_command(cmd => 'uname -r'),
         backend => get_required_var('BACKEND'),
         flavor => get_required_var('FLAVOR'),
-        ltp_version => $instance->run_ssh_command(cmd => qq(rpm -q --qf '%{VERSION}\n' $ltp_pkg)),
+        ltp_version => $ltp_version,
         gcc => '',
         libc => '',
         harness => 'SUSE OpenQA',
