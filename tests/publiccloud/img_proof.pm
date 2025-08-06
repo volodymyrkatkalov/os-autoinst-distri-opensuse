@@ -18,6 +18,50 @@ use version_utils 'is_sle';
 use File::Basename 'basename';
 use upload_system_log 'upload_supportconfig_log';
 
+sub run_azure_csp_cli_tests {
+    my ($self, $instance) = @_;
+
+    my $cmd = 'az version';
+    my $output = $instance->ssh_script_output(cmd => $cmd);
+    record_info('Azure CLI Version', $output);
+    my $match = qr/"azure-cli"\s*:\s*"[0-9.]+"/;
+    unless ($output =~ $match) {
+        record_soft_failure 'Azure CLI not found or output invalid';
+    }
+}
+
+sub run_ec2_csp_cli_tests {
+    my ($self, $instance) = @_;
+
+    my $cmd = 'aws --version';
+    my $output = $instance->ssh_script_output(cmd => $cmd);
+    record_info('AWS CLI Version', $output);
+    my $match = qr/aws-cli\/[0-9.]+/;
+    unless ($output =~ $match) {
+        record_soft_failure 'AWS CLI not found or output invalid';
+    }
+}
+
+sub run_gce_csp_cli_tests {
+    my ($self, $instance) = @_;
+
+    my $cmd = 'gcloud --version';
+    my $output = $instance->ssh_script_output(cmd => $cmd);
+    record_info('GCE CLI Version', $output);
+    my $match = qr/Google Cloud SDK [0-9.]+/;
+    unless ($output =~ $match) {
+        record_soft_failure 'GCloud CLI not found or output invalid';
+    }
+}
+
+sub run_csp_cli_tests {
+    my ($self, $instance) = @_;
+
+    $self->run_azure_csp_cli_tests($instance) if (get_var('PUBLIC_CLOUD_PROVIDER') eq 'AZURE');
+    $self->run_ec2_csp_cli_tests($instance) if (get_var('PUBLIC_CLOUD_PROVIDER') eq 'EC2');
+    $self->run_gce_csp_cli_tests($instance) if (get_var('PUBLIC_CLOUD_PROVIDER') eq 'GCE');
+}
+
 sub patch_json {
     my ($file) = @_;
     my $data = Mojo::JSON::decode_json(script_output("cat $file"));
@@ -162,6 +206,8 @@ sub run {
         assert_script_run("curl --fail -LO $url");
         upload_logs("suse.linux.enterprise.15.xml.gz");
     }
+
+    $self->run_csp_cli_tests($instance) if is_sle('>=16.0');
 }
 
 sub cleanup {
