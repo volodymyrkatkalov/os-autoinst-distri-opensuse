@@ -131,7 +131,7 @@ sub verify_partition_label {
 }
 
 sub verify_selinux {
-    my $selinux_should_be_permissive = is_sle('>=16.0') && is_sles4sap();
+    my $selinux_should_be_permissive = is_sle('=12-sp5') && is_sles4sap();
     if (has_selinux_by_default) {
         validate_script_output(
             'sestatus',
