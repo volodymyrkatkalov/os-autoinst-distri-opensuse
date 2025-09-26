@@ -41,6 +41,8 @@ sub prepare_virtual_env {
 
     record_info('Install', 'Installing needed packages');
 
+    my $should_install_wheel = 0;
+
     if ($host_distri =~ /ubuntu/) {
         # Sometimes, the host doesn't get an IP automatically via dhcp, we need force it just in case
         assert_script_run("dhclient -v");
@@ -64,10 +66,15 @@ sub prepare_virtual_env {
         assert_script_run('while pgrep -f zypp; do sleep 1; done', timeout => 300);
         my $version = "$version.$sp";
         if ($version =~ /12\./) {
-            $python = 'python3.6';
+            $should_install_wheel = 1;
+            $python = 'python3.11';
             @packages = ('jq');
             # PackageHub is needed for jq
             script_retry("SUSEConnect -p PackageHub/12.5/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
+            zypper_call("ar -f http://download.suse.de/ibs/SUSE:/SLE-12:/Update:/Products:/SaltBundle:/Update/standard/ saltbundle");
+            zypper_call("rm python3-pip");
+            zypper_call("in saltbundlepy-base venv-salt-minion");
+            $virtualenv = "/usr/lib/venv-salt-minion/bin/activate";
         } elsif ($version !~ /15\.[1-3]/) {
             $python = 'python3.11';
             script_retry("SUSEConnect -p sle-module-python3/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout) unless ($host_distri =~ /opensuse/);
@@ -81,7 +88,13 @@ sub prepare_virtual_env {
     assert_script_run("$python --version");
     assert_script_run("$python -m venv bci");
     assert_script_run("source $virtualenv");
-    assert_script_run("$python -m pip --quiet install --upgrade pip", timeout => $install_timeout);
+    if ($should_install_wheel) {
+        assert_script_run("$python -m pip install wheel", timeout => $install_timeout);
+        # assert_script_run("pip install --upgrade pip", timeout => $install_timeout);
+        assert_script_run("$python -m pip install --upgrade setuptools", timeout => $install_timeout);
+    } else {
+        assert_script_run("$python -m pip --quiet install --upgrade pip", timeout => $install_timeout);
+    }
     assert_script_run("$python -m pip --quiet install tox", timeout => $install_timeout);
     assert_script_run('deactivate');
 }
