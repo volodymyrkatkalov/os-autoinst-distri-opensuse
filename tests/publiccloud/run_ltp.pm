@@ -22,6 +22,7 @@ use publiccloud::utils qw(is_byos is_ondemand is_gce registercloudguest register
 use publiccloud::ssh_interactive 'select_host_console';
 use Data::Dumper;
 use version_utils;
+use MIME::Base64 qw(encode_base64);
 
 my $kirk_virtualenv = 'kirk-virtualenv';
 our $root_dir = '/root';
@@ -193,6 +194,22 @@ sub dump_kernel_config
     record_info("ver_linux", $instance->run_ssh_command("/opt/ltp/ver_linux"));
 }
 
+sub disable_selinux {
+    my ($self, $instance) = @_;
+    record_info("Disable SELinux", "Disabling SELinux on the instance");
+    $instance->run_ssh_command(cmd => 'sudo setenforce 0 || true', timeout => 180);
+    $instance->run_ssh_command(cmd => q(sudo sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config));
+    $instance->run_ssh_command(cmd => q(sudo grep ^SELINUX= /etc/selinux/config));
+}
+
+sub dump_runltp_command {
+    my ($self, $cmd) = @_;
+    record_info('LTP Command', $cmd);
+    my $b64 = encode_base64($cmd, '');
+    assert_script_run("printf '%s' '$b64' | base64 -d | tee run_ltp.sh");
+    assert_script_run("chmod +x run_ltp.sh");
+}
+
 sub run {
     my ($self, $args) = @_;
     my $qam = get_var('PUBLIC_CLOUD_QAM', 0);
@@ -213,6 +230,8 @@ sub run {
 
     $self->prepare_scripts();
     $self->register_instance($instance, $qam);
+
+    $self->disable_selinux($instance);
 
     my $ltp_dir = '/tmp/ltp';
     my $ltp_prefix = '/opt/ltp';
@@ -242,8 +261,8 @@ sub run {
 
     $self->dump_kernel_config($instance);
     record_info('LTP START', 'Command launch');
+    $self->dump_runltp_command($cmd_run_ltp);
     script_run($cmd_run_ltp, timeout => get_var('LTP_TIMEOUT', 30 * 60));
-    assert_script_run(qq{echo $cmd_run_ltp > run_ltp.sh && chmod +x run_ltp.sh});
     assert_script_run('false');
     record_info('LTP END', 'tests done');
 }
