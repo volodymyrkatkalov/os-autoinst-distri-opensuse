@@ -242,6 +242,7 @@ sub run {
 
     $self->dump_kernel_config($instance);
     record_info('LTP START', 'Command launch');
+    assert_script_run("false");
     script_run($cmd_run_ltp, timeout => get_var('LTP_TIMEOUT', 30 * 60));
     record_info('LTP END', 'tests done');
 }
