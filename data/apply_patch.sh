@@ -1,0 +1,1 @@
+sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ ignore_loglevel"/' /etc/default/grub
