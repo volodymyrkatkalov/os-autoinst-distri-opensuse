@@ -18,7 +18,7 @@ use Mojo::UserAgent;
 use LTP::utils qw(get_ltproot prepare_whitelist_environment);
 use LTP::install qw(get_required_build_dependencies get_maybe_build_dependencies get_submodules_to_rebuild);
 use LTP::WhiteList;
-use publiccloud::utils qw(is_byos is_ondemand is_gce registercloudguest register_openstack install_in_venv get_python_exec venv_activate zypper_install_remote zypper_install_available_remote zypper_add_repo_remote);
+use publiccloud::utils qw(is_byos is_ondemand is_gce registercloudguest register_openstack install_in_venv get_python_exec venv_activate zypper_install_remote zypper_install_available_remote zypper_add_repo_remote upload_asset_on_remote);
 use publiccloud::ssh_interactive 'select_host_console';
 use Data::Dumper;
 use version_utils;
@@ -232,6 +232,21 @@ sub run {
     $self->prepare_kirk($instance);
 
     $self->printk_loglevel($instance);
+
+    upload_asset_on_remote(
+        instance => $instance,
+        source_data_url_path => "apply_patch.sh",
+        destination_path => "/usr/local/bin/apply_patch.sh",
+        elevated => 1
+    );
+
+    $instance->ssh_assert_script_run("sudo chmod +x /usr/local/bin/apply_patch.sh");
+    $instance->ssh_assert_script_run("sudo /usr/local/bin/apply_patch.sh");
+
+    record_info('/etc/default/grub', $instance->ssh_script_output("cat /etc/default/grub"));
+
+    $instance->ssh_assert_script_run("sudo update-bootloader");
+    $instance->softreboot(timeout => get_var('PUBLIC_CLOUD_REBOOT_TIMEOUT', 600));
 
     my $reset_cmd = $root_dir . '/restart_instance.sh ' . instance_log_args($provider, $instance);
     my $log_start_cmd = $root_dir . '/log_instance.sh start ' . instance_log_args($provider, $instance);
