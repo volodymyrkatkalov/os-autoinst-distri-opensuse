@@ -45,6 +45,8 @@ our @EXPORT = qw(
   handle_scc_popups
   process_modules
   runtime_registration
+  detect_suseconnect_path
+  detect_scc_credentials_path
   %SLE15_MODULES
   %SLE15_DEFAULT_MODULES
   %ADDONS_REGCODE
@@ -1107,6 +1109,36 @@ sub runtime_registration {
     # Check that repos actually work
     zypper_call 'refresh';
     zypper_call 'repos --details';
+}
+
+sub detect_suseconnect_path {
+    my $ret = '';
+
+    if (script_run("test -f /etc/SUSEConnect") == 0) {
+        $ret = '/etc/SUSEConnect';
+    } elsif (script_run("test -f /etc/SUSEConnect.example") == 0) {
+        $ret = '/etc/SUSEConnect.example';
+    } else {
+        die("Neither /etc/SUSEConnect nor /etc/SUSEConnect.example exist, please check!");
+    }
+
+    return $ret;
+}
+
+sub detect_scc_credentials_path {
+    my $ret = '';
+
+    if (script_run("test -f /etc/zypp/credentials.d/SCCcredentials") == 0) {
+        $ret = '/etc/zypp/credentials.d/SCCcredentials';
+    } elsif (script_run("test -f /run/secrets/SCCcredentials") == 0) {
+        $ret = '/run/secrets/SCCcredentials';
+    } elsif (script_run("test -f /run/secrets/credentials.d/SCCcredentials") == 0) {
+        $ret = '/run/secrets/credentials.d/SCCcredentials';
+    } else {
+        die("No SCCcredentials file found in known locations, please check!");
+    }
+
+    return $ret;
 }
 
 1;

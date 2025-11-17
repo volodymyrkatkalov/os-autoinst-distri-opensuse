@@ -11,6 +11,7 @@ use Mojo::Base 'containers::basetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use version_utils qw(is_opensuse);
+use registration qw(detect_suseconnect_path detect_scc_credentials_path);
 use utils;
 
 my $runtime;
@@ -30,11 +31,15 @@ sub run {
       ? "buildah bud --layers"
       : "DOCKER_BUILDKIT=1 docker build";
 
-    my $scc_credentials_path = '/etc/zypp/credentials.d/SCCcredentials';
-    my $suseconnect_path = '/etc/SUSEConnect';
+    my $scc_credentials_path = detect_scc_credentials_path();
+    my $suseconnect_path = detect_suseconnect_path();
+
 
     my $image_tag = "suseconnect-test-$runtime_name";
-    my $container_cmd = "$runtime_name run --rm $image_tag";
+    my $container_cmd = "$runtime_name run ";
+    $container_cmd .= "-v $scc_credentials_path:/etc/zypp/credentials.d/SCCcredentials ";
+    $container_cmd .= "-v $suseconnect_path:/etc/SUSEConnect ";
+    $container_cmd .= "--rm $image_tag";
 
     if ($runtime_name =~ /podman/i && script_run("command -v buildah")) {
         record_info("Installing buildah");
