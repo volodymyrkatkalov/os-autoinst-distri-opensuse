@@ -118,10 +118,6 @@ azure_stop_log()
     sleep 30
     az vm boot-diagnostics get-boot-log --ids "$INSTANCE_ID" > "${OUTPUT_DIR}/$CNT""_boot_log_stop.txt" 2>&1
     set -e
-    if [ -f "$PID_FILE" ]; then
-      kill -9 "$(< "$PID_FILE")"
-      rm "$PID_FILE"
-    fi
 }
 
 openstack_start_log()
