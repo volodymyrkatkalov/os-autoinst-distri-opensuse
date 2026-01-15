@@ -221,6 +221,7 @@ sub run {
 
     my $ltp_dir = '/tmp/ltp';
     my $ltp_prefix = '/opt/ltp';
+
     if (should_fully_build_ltp_from_git()) {
         $self->fully_build_ltp_from_git($instance, $ltp_dir, $ltp_prefix);
     } else {
@@ -236,6 +237,12 @@ sub run {
     $self->prepare_kirk($instance);
 
     $self->printk_loglevel($instance);
+
+    zypper_call("in ssdeep");
+
+    assert_script_run('curl ' . data_url('publiccloud/kmp_merge.c') . ' -o kmp_merge.c');
+    assert_script_run('gcc -O3 -Wall -Wextra -std=c11 -o /root/kmp_merge kmp_merge.c');
+    assert_script_run('rm -f kmp_merge.c');
 
     my $reset_cmd = $root_dir . '/restart_instance.sh ' . instance_log_args($provider, $instance);
     my $log_start_cmd = $root_dir . '/log_instance.sh start ' . instance_log_args($provider, $instance);

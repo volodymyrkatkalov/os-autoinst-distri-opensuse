@@ -34,7 +34,7 @@ sub run {
     ensure_ca_certificates_suse_installed();
 
     # Install prerequisite packages test
-    zypper_call('-q in python-img-proof python-img-proof-tests');
+    zypper_call('-q in python-img-proof python-img-proof-tests rdiff');
     record_info('python exec', script_output("$python_exec --version"));
 
     assert_script_run("img-proof list");
