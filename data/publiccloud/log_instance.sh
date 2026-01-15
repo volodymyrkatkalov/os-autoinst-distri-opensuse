@@ -13,29 +13,99 @@ CNT_FILE=${OUTPUT_DIR}/.cnt
 PID_FILE=${OUTPUT_DIR}/pid
 SSH_OPTS="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR"
 
+ec2_is_running()
+{
+    [ -f "$PID_FILE" ] || return 1
+    kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+debug_snapshot_id=0;
+
+capture_debug_snapshot()
+{
+    aws ec2 get-console-output --instance-id "$INSTANCE_ID" --latest --query Output --output text \
+        > "${OUTPUT_DIR}/stdout-$debug_snapshot_id" 2>"${OUTPUT_DIR}/stderr-$debug_snapshot_id" || true
+
+    debug_snapshot_id=$((debug_snapshot_id + 1))
+}
+
+ec2_read_serial()
+{
+    local cur="${OUTPUT_DIR}/ec2.cur"
+    local prev="${OUTPUT_DIR}/ec2.prev"
+    local out="${OUTPUT_DIR}/serial.log"
+
+    local sig="${OUTPUT_DIR}/ec2.sig"
+    local delta="${OUTPUT_DIR}/ec2.delta"
+    local new="${OUTPUT_DIR}/ec2.new"
+
+    aws ec2 get-console-output --instance-id "$INSTANCE_ID" --latest --query Output --output text \
+        > "$cur" 2>>"${OUTPUT_DIR}/stderr" || return 0
+
+    capture_debug_snapshot
+
+    # normalize line endings
+    tr -d '\r' < "$cur" > "${cur}.clean" && mv "${cur}.clean" "$cur"
+
+    # First run
+    if [ ! -f "$prev" ]; then
+        cat "$cur" >> "$out"
+        cp "$cur" "$prev"
+        return 0
+    fi
+
+    # If snapshot didn't change, do nothing
+    if cmp -s "$prev" "$cur"; then
+        rm -f "$cur"
+        return 0
+    fi
+
+    # ---- rdiff-based merge ----
+
+    # Build signature of previous snapshot
+    rdiff signature "$prev" "$sig"
+
+    # Compute delta from previous → current
+    rdiff delta "$sig" "$cur" "$delta"
+
+    # Apply delta to previous snapshot
+    if ! rdiff patch "$prev" "$delta" "$new"; then
+        # Extremely defensive fallback: append whole snapshot
+        cat "$cur" >> "$out"
+        cp "$cur" "$prev"
+        rm -f "$sig" "$delta" "$new"
+        return 0
+    fi
+
+    # Append only the new content to serial.log
+    # (diff between prev and reconstructed new)
+    local prev_size new_size
+    prev_size=$(wc -c < "$prev")
+    new_size=$(wc -c < "$new")
+
+    if [ "$new_size" -gt "$prev_size" ]; then
+        dd if="$new" bs=1 skip="$prev_size" 2>/dev/null >> "$out"
+    fi
+
+    # Update prev snapshot
+    mv "$new" "$prev"
+
+    rm -f "$cur" "$sig" "$delta"
+}
+
 ec2_start_log()
 {
-    inc_unique_counter
-    set +e
-    aws ec2 get-console-output --instance-id "$INSTANCE_ID" --no-latest --output text > "${OUTPUT_DIR}/${CNT}_get_console_output_start.log"
-    set -e
-    # shellcheck disable=2086
-    nohup ssh $SSH_OPTS "ec2-user@${HOST}" -- sudo dmesg -c -w > "${OUTPUT_DIR}/${CNT}_dmesg.log" 2>&1 &
+    ec2_is_running && exit 2
+    ( while true; do ec2_read_serial; sleep 30; done; ) &
     echo $! > "$PID_FILE"
 }
 
 ec2_stop_log()
 {
-    read_unique_counter
-    set +e
-    aws ec2 get-console-output --instance-id "$INSTANCE_ID" --no-latest --output text > "${OUTPUT_DIR}/${CNT}_get_console_output_stop.log"
-    set -e
-    if [ -f "$PID_FILE" ]; then
-      kill -9 "$(< "$PID_FILE")" || echo "Process already stopped"
-      rm "$PID_FILE"
-    fi
+    ec2_is_running || return 0
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    rm -f "$PID_FILE"
 }
-
 
 gce_read_serial()
 {

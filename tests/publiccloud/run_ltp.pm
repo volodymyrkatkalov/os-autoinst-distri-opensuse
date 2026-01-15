@@ -221,6 +221,7 @@ sub run {
 
     my $ltp_dir = '/tmp/ltp';
     my $ltp_prefix = '/opt/ltp';
+
     if (should_fully_build_ltp_from_git()) {
         $self->fully_build_ltp_from_git($instance, $ltp_dir, $ltp_prefix);
     } else {
