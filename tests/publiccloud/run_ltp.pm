@@ -200,6 +200,7 @@ sub dump_kernel_config
 
 sub run {
     my ($self, $args) = @_;
+    record_info("--no-latest");
     my $qam = get_var('PUBLIC_CLOUD_QAM', 0);
     my $arch = check_var('PUBLIC_CLOUD_ARCH', 'arm64') ? 'aarch64' : 'x86_64';
     my $ltp_pkg = get_var('LTP_PKG', 'ltp-stable');
