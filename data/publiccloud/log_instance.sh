@@ -17,7 +17,7 @@ ec2_start_log()
 {
     inc_unique_counter
     set +e
-    aws ec2 get-console-output --instance-id "$INSTANCE_ID" --output text > "${OUTPUT_DIR}/${CNT}_get_console_output_start.log"
+    aws ec2 get-console-output --instance-id "$INSTANCE_ID"  --no-latest --no-paginate --output text > "${OUTPUT_DIR}/${CNT}_get_console_output_start.log"
     set -e
     # shellcheck disable=2086
     nohup ssh $SSH_OPTS "ec2-user@${HOST}" -- sudo dmesg -c -w > "${OUTPUT_DIR}/${CNT}_dmesg.log" 2>&1 &
@@ -28,7 +28,7 @@ ec2_stop_log()
 {
     read_unique_counter
     set +e
-    aws ec2 get-console-output --instance-id "$INSTANCE_ID" --output text > "${OUTPUT_DIR}/${CNT}_get_console_output_stop.log"
+    aws ec2 get-console-output --instance-id "$INSTANCE_ID"  --no-latest --no-paginate --output text > "${OUTPUT_DIR}/${CNT}_get_console_output_stop.log"
     set -e
     if [ -f "$PID_FILE" ]; then
       kill -9 "$(< "$PID_FILE")" || echo "Process already stopped"
