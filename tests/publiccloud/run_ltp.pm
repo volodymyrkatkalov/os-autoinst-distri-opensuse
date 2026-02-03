@@ -20,6 +20,7 @@ use LTP::install qw(get_required_build_dependencies get_maybe_build_dependencies
 use LTP::WhiteList;
 use publiccloud::utils;
 use publiccloud::ssh_interactive 'select_host_console';
+use JSON qw(decode_json);
 use Data::Dumper;
 use version_utils;
 use Utils::Architectures qw(is_aarch64);
@@ -27,6 +28,17 @@ use Utils::Architectures qw(is_aarch64);
 my $kirk_virtualenv = 'kirk-virtualenv';
 our $root_dir = '/root';
 our $ltp_timeout = get_var('LTP_TIMEOUT', 12600);
+
+my $EC2_CW_LOGS = [
+    {
+        log_group => '/ec2/logs/messages',
+        filename => 'ec2__logs__messages.log',
+    },
+    {
+        log_group => '/ec2/logs/dmesg',
+        filename => 'ec2__logs__dmesg.log',
+    }
+];
 
 sub should_fully_build_ltp_from_git {
     return get_var('PUBLIC_CLOUD_LTP_GIT_FULL_BUILD', 0);    # 1 if env var is set, otherwise 0
@@ -198,6 +210,210 @@ sub dump_kernel_config
     record_info("ver_linux", $instance->ssh_script_output("/opt/ltp/ver_linux"));
 }
 
+sub disable_and_stop_ec2_cloudwatch_agent {
+    my ($self, $instance) = @_;
+
+    chomp(my $enabled = $instance->ssh_script_output(
+            "sudo systemctl is-enabled amazon-cloudwatch-agent",
+            proceed_on_failure => 1
+    ));
+
+    $instance->ssh_assert_script_run(
+        "sudo systemctl disable --now amazon-cloudwatch-agent"
+    ) if ($enabled eq "enabled");
+
+    chomp(my $active = $instance->ssh_script_output(
+            "sudo systemctl is-active amazon-cloudwatch-agent",
+            proceed_on_failure => 1
+    ));
+
+    $instance->ssh_assert_script_run(
+        "sudo systemctl stop amazon-cloudwatch-agent"
+    ) if ($active eq "active");
+
+    $instance->retry_ssh_command(
+        cmd => "! sudo systemctl is-active amazon-cloudwatch-agent",
+        timeout => 420,
+        retry => 6,
+        delay => 60
+    );
+
+    sleep 60;    # wait for CloudWatch agent to flush logs
+}
+sub download_ec2_cloudwatch_logs {
+    my ($self, $instance) = @_;
+
+    my $instance_id = $instance->instance_id;
+
+    $self->disable_and_stop_ec2_cloudwatch_agent($instance);
+
+    for my $entry (@$EC2_CW_LOGS) {
+
+        my $log_group = $entry->{log_group};
+        my $log_filename = $entry->{filename};
+        my $log_stream = $instance_id;
+
+        my $next_token;
+        my $prev_token = "";
+
+        # check if log stream exists first, if not skip to next log group
+        my $describe_cmd =
+          "aws logs describe-log-streams " .
+          "--log-group-name '$log_group' " .
+          "--log-stream-name-prefix '$log_stream' " .
+          "--query 'logStreams[?logStreamName==`$log_stream`].logStreamName' " .
+          "--output text";
+        my $existing_log_stream = script_output($describe_cmd, timeout => 300, proceed_on_failure => 1);
+        chomp $existing_log_stream;
+        unless ($existing_log_stream && $existing_log_stream eq $log_stream) {
+            record_info("EC2 CloudWatch Logs", "Log stream '$log_stream' does not exist in log group '$log_group'. Skipping download for this log group.");
+            next;
+        }
+
+        # truncate file first
+        assert_script_run(": > '$log_filename'");
+
+        my $end_time = int(time() * 1000);
+
+        while (1) {
+
+            my $cmd =
+              "aws logs get-log-events " .
+              "--log-group-name '$log_group' " .
+              "--log-stream-name '$log_stream' " .
+              "--start-from-head ";
+
+            $cmd .= "--next-token '$next_token' " if $next_token;
+
+            # 1) append messages
+            assert_script_run(
+                "$cmd --end-time $end_time --query 'events[*].[timestamp,message]' --output text >> '$log_filename'",
+                timeout => 300
+            );
+
+            # 2) fetch nextForwardToken only
+            my $token_cmd =
+              "$cmd --end-time $end_time --query 'nextForwardToken' --output text";
+
+            my $new_token = script_output($token_cmd, timeout => 300);
+
+            last if !$new_token || $new_token eq $prev_token;
+
+            $prev_token = $new_token;
+            $next_token = $new_token;
+        }
+
+        upload_logs($log_filename);
+
+        # delete log stream + contents
+        assert_script_run(
+            "aws logs delete-log-stream " .
+              "--log-group-name '$log_group' " .
+              "--log-stream-name '$log_stream'"
+        );
+    }
+}
+
+sub install_dmesg_capture_to_log
+{
+    my ($self, $instance) = @_;
+
+    my $dmesg_capture_service_filename = 'dmesg-capture.service';
+    assert_script_run("curl " . data_url("publiccloud/$dmesg_capture_service_filename") . ' -o ' . $dmesg_capture_service_filename);
+    $instance->scp($dmesg_capture_service_filename, 'remote:/tmp/' . $dmesg_capture_service_filename, 9999);
+    $instance->ssh_assert_script_run("sudo mv /tmp/$dmesg_capture_service_filename /etc/systemd/system/");
+    $instance->ssh_assert_script_run("sudo chown root:root /etc/systemd/system/$dmesg_capture_service_filename");
+    $instance->ssh_assert_script_run("sudo chmod 644 /etc/systemd/system/$dmesg_capture_service_filename");
+
+    $instance->ssh_assert_script_run(
+        "sudo systemctl daemon-reload && " .
+          "sudo systemctl enable --now $dmesg_capture_service_filename"
+    );
+
+    my $dmesg_capture_logrotate_filename = 'dmesg-capture-logrotate.conf';
+    my $dmesg_capture_logrotate_target_filepath = '/etc/logrotate.d/dmesg';
+    assert_script_run("curl " . data_url("publiccloud/$dmesg_capture_logrotate_filename") . ' -o ' . $dmesg_capture_logrotate_filename);
+    $instance->scp($dmesg_capture_logrotate_filename, 'remote:/tmp/' . $dmesg_capture_logrotate_filename, 9999);
+    $instance->ssh_assert_script_run("sudo mv /tmp/$dmesg_capture_logrotate_filename $dmesg_capture_logrotate_target_filepath");
+    $instance->ssh_assert_script_run("sudo chown root:root $dmesg_capture_logrotate_target_filepath");
+    $instance->ssh_assert_script_run("sudo chmod 644 $dmesg_capture_logrotate_target_filepath");
+    $instance->ssh_assert_script_run("sudo logrotate -d $dmesg_capture_logrotate_target_filepath");
+}
+
+sub install_ec2_cloudwatch_agent
+{
+    my ($self, $instance) = @_;
+
+    $self->install_dmesg_capture_to_log($instance);
+
+    $instance->ssh_assert_script_run(
+        "sudo mkdir -p /etc/systemd/journald.conf.d && " .
+          "echo -e '[Journal]\\nStorage=persistent' | sudo tee /etc/systemd/journald.conf.d/persistent.conf && " .
+          "sudo systemctl restart systemd-journald"
+    );
+
+    my $rpm_arch = "amd64";
+    $rpm_arch = "arm64" if is_aarch64();
+
+    my $rpm_url = "https://amazoncloudwatch-agent.s3.amazonaws.com/suse/" . $rpm_arch . "/latest/amazon-cloudwatch-agent.rpm";
+    my $rpm_filename = "amazon-cloudwatch-agent.rpm";
+    my $public_key = "https://amazoncloudwatch-agent.s3.amazonaws.com/assets/amazon-cloudwatch-agent.gpg";
+    my $public_key_filename = "amazon-cloudwatch-agent.gpg";
+    my $fingerprint = "9376 16F3 450B 7D80 6CBD 9725 D581 6730 3B78 9C72";
+    my $fingerprint_merged = $fingerprint;
+    $fingerprint_merged =~ s/\s+//g;
+
+    $instance->ssh_assert_script_run("curl -L $public_key -o $public_key_filename");
+    my $gpg_import_output = $instance->ssh_script_output("sudo gpg --import $public_key_filename");
+    my $key_id = $gpg_import_output =~ /key\s+([0-9A-F]+):/ ? $1 : die("Failed to extract key ID from gpg output: " . $gpg_import_output);
+    my $imported_fingerprint = $instance->ssh_script_output("sudo gpg --fingerprint --with-colons $key_id");
+    die("Failed to import GPG key or fingerprint does not match expected value. Output: " . $imported_fingerprint) if ($imported_fingerprint !~ /$fingerprint_merged/);
+
+    $instance->ssh_assert_script_run("curl -LO $rpm_url.sig");
+    $instance->ssh_assert_script_run("curl -LO $rpm_url");
+
+    my $verification_output = $instance->ssh_script_output("sudo gpg --verify $rpm_filename.sig $rpm_filename");
+    die("RPM signature verification failed for $rpm_filename: " . $verification_output) if ($verification_output !~ /Good signature/);
+
+    $instance->ssh_assert_script_run("sudo rpm -Uvh amazon-cloudwatch-agent.rpm");
+
+    my $cloudwatch_config_filename = 'cloudwatch_config.json';
+    assert_script_run("curl " . data_url('publiccloud/cloudwatch_config.json') . ' -o ' . $cloudwatch_config_filename);
+    $instance->scp($cloudwatch_config_filename, 'remote:/tmp/' . $cloudwatch_config_filename, 9999);
+
+    $instance->ssh_assert_script_run(cmd => "sudo mv /tmp/$cloudwatch_config_filename /opt/aws/amazon-cloudwatch-agent/etc/");
+
+    $instance->ssh_assert_script_run(
+        "sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl " .
+          "-a fetch-config " .
+          "-m ec2 " .
+          "-c file:/opt/aws/amazon-cloudwatch-agent/etc/cloudwatch_config.json " .
+          "-s"
+    );
+
+    $instance->ssh_assert_script_run(
+        "sudo systemctl enable --now amazon-cloudwatch-agent"
+    );
+
+    record_info("EC2 CloudWatch Agent logs", $instance->ssh_script_output("sudo journalctl -u amazon-cloudwatch-agent -n 200"));
+
+    record_info("EC2 CloudWatch Agent Status", $instance->ssh_script_output("sudo systemctl status amazon-cloudwatch-agent"));
+    $instance->ssh_assert_script_run("sudo systemctl is-active amazon-cloudwatch-agent");
+}
+
+sub snapshot_ec2_serial_console
+{
+    my ($self, $instance) = @_;
+
+    my $instance_id = $instance->instance_id;
+
+    my $timestamp = time();
+    my $output_file = "ec2__serial_console__${timestamp}.log";
+
+    script_run("aws ec2 get-console-output --instance-id '$instance_id' --query Output --output text > '$output_file'", timeout => 300);
+    upload_logs($output_file);
+}
+
 sub run {
     my ($self, $args) = @_;
     my $qam = get_var('PUBLIC_CLOUD_QAM', 0);
@@ -221,6 +437,9 @@ sub run {
 
     my $ltp_dir = '/tmp/ltp';
     my $ltp_prefix = '/opt/ltp';
+
+    $self->install_ec2_cloudwatch_agent($instance) if (is_ec2());
+
     if (should_fully_build_ltp_from_git()) {
         $self->fully_build_ltp_from_git($instance, $ltp_dir, $ltp_prefix);
     } else {
@@ -238,15 +457,20 @@ sub run {
     $self->printk_loglevel($instance);
 
     my $reset_cmd = $root_dir . '/restart_instance.sh ' . instance_log_args($provider, $instance);
-    my $log_start_cmd = $root_dir . '/log_instance.sh start ' . instance_log_args($provider, $instance);
 
     my $env = get_var('LTP_PC_RUNLTP_ENV');
-    $self->prepare_logging($log_start_cmd);
+    if (is_ec2()) {
+        $self->snapshot_ec2_serial_console($instance);
+    } else {
+        my $log_start_cmd = $root_dir . '/log_instance.sh start ' . instance_log_args($provider, $instance);
+        $self->prepare_logging($log_start_cmd);
+    }
 
     my $cmd_run_ltp = $self->prepare_ltp_cmd($instance, $provider, $reset_cmd, $ltp_command, $skip_tests, $env);
 
     $self->dump_kernel_config($instance);
     record_info('LTP START', 'Command launch');
+    $self->snapshot_ec2_serial_console($instance) if (is_ec2());
     # $ltp_timeout is also used for --suite-timeout so we need give kirk some time to try to kill itself before trying to kill it
     my $kirk_exit_code = script_run($cmd_run_ltp, timeout => $ltp_timeout + 60);
     record_info('LTP END', 'krik finished with ' . $kirk_exit_code);
@@ -385,14 +609,18 @@ sub cleanup {
         die('cleanup: Either $self->{run_args} or $self->{run_args}->{my_instance} is not available. Maybe the test died before the instance has been created?');
     }
 
-    if (script_run("test -f $root_dir/log_instance.sh") == 0) {
+    if (is_ec2()) {
+        $self->snapshot_ec2_serial_console($self->{run_args}->{my_instance});
+        $self->download_ec2_cloudwatch_logs($self->{run_args}->{my_instance});
+    }
+    elsif (script_run("test -f $root_dir/log_instance.sh") == 0) {
         my $log_instance_stop_command = $root_dir . '/log_instance.sh stop ' . instance_log_args($self->{run_args}->{my_provider}, $self->{run_args}->{my_instance});
-        my $log_instance_stop_output = script_output($log_instance_stop_command, timeout => 600, proceed_on_failure => 1);
-        record_info($log_instance_stop_command, $log_instance_stop_output);
+        script_run($log_instance_stop_command, timeout => 600);
 
         script_run("(cd /tmp/log_instance && tar -zcf $root_dir/instance_log.tar.gz *)");
         upload_logs("$root_dir/instance_log.tar.gz", failok => 1);
     }
+
     return 1;
 }
 
