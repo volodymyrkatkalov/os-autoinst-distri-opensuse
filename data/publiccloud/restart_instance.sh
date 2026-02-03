@@ -45,7 +45,9 @@ ZONE=$4
 CNT=360;
 LOG_SCRIPT="./log_instance.sh"
 
-test -x $LOG_SCRIPT && $LOG_SCRIPT stop "$PROVIDER" "$INSTANCE_ID" "$HOST" "$ZONE"
+if [[ "$PROVIDER" != "EC2" && -x "$LOG_SCRIPT" ]]; then
+    "$LOG_SCRIPT" stop "$PROVIDER" "$INSTANCE_ID" "$HOST" "$ZONE"
+fi
 
 case $PROVIDER in
     EC2)
