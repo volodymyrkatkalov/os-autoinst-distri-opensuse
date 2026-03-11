@@ -84,6 +84,8 @@ sub load_maintenance_publiccloud_tests {
         } elsif (get_var('PUBLIC_CLOUD_EXTRATESTS')) {
             loadtest "publiccloud/selinux" if (is_sle("16.0+"));
             loadtest "publiccloud/gcp_google_guest_agent" if (is_gce() && is_sle("16.0+"));
+        } elsif (get_var('PUBLIC_CLOUD_OSCAP_TEST')) {
+            loadtest "publiccloud/oscap", run_args => $args;
         }
 
         loadtest("publiccloud/ssh_interactive_end", run_args => $args) unless get_var('PUBLIC_CLOUD_XFS');
@@ -120,7 +122,8 @@ my $should_use_runargs = sub {
       PUBLIC_CLOUD_NVIDIA
       PUBLIC_CLOUD_FUNCTIONAL
       PUBLIC_CLOUD_AHB
-      PUBLIC_CLOUD_NEW_INSTANCE_TYPE);
+      PUBLIC_CLOUD_NEW_INSTANCE_TYPE
+      PUBLIC_CLOUD_OSCAP_TEST);
     return grep { exists $bmwqemu::vars{$_} } @public_cloud_variables;
 };
 
@@ -187,6 +190,8 @@ sub load_latest_publiccloud_tests {
             } elsif (get_var('PUBLIC_CLOUD_EXTRATESTS')) {
                 loadtest "publiccloud/selinux" if (is_sle("16.0+"));
                 loadtest "publiccloud/gcp_google_guest_agent" if (is_gce() && is_sle("16.0+"));
+            } elsif (get_var('PUBLIC_CLOUD_OSCAP_TEST')) {
+                loadtest "publiccloud/oscap", run_args => $args;
             }
             loadtest("publiccloud/ssh_interactive_end", run_args => $args) unless get_var('PUBLIC_CLOUD_XFS');
         }
