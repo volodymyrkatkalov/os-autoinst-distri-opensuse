@@ -435,6 +435,9 @@ sub run {
     my $ltp_dir = '/tmp/ltp';
     my $ltp_prefix = '/opt/ltp';
 
+    record_info("/var/tmp free space", $instance->ssh_script_output(cmd => "df -h /var/tmp"));
+    record_info("Top 20 largest in /opt", $instance->ssh_script_output(cmd => "sudo du -h --max-depth=1 /opt/ | sort -hr | head -n 20", timeout => 600));
+
     $self->install_ec2_cloudwatch_agent($instance) if (is_ec2());
 
     if (should_fully_build_ltp_from_git()) {
