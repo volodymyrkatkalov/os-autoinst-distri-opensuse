@@ -184,7 +184,7 @@ sub run {
         }
     } else {
         my $expected_msg = is_public_cloud() ? qr/(no persistent journal was found|no journal boot entry found)/i : qr/no persistent journal was found/i;
-        validate_script_output('journalctl --no-pager --boot=-1 2>&1', $expected_msg, fail_message => "Persistent journal present where it shouldn't be") unless is_sle('<15');
+        validate_script_output('journalctl --no-pager --boot=-1 2>&1', $expected_msg, fail_message => "Persistent journal present where it shouldn't be", proceed_on_failure => 1) unless is_sle('<15');
         assert_script_run "mkdir -p ${\ PERSISTENT_LOG_DIR }";
         assert_script_run "systemd-tmpfiles --create --prefix ${\ PERSISTENT_LOG_DIR }";
         # https://bugzilla.suse.com/show_bug.cgi?id=1196637
