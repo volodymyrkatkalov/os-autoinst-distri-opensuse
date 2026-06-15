@@ -25,6 +25,11 @@ sub run {
     my $instance = $args->{my_instance};
     my $remote = $instance->username . '@' . $instance->public_ip;
 
+    $instance->ssh_assert_script_run(cmd => 'sudo mkdir -p /var/log/journal');
+    $instance->ssh_assert_script_run(cmd => 'sudo systemd-tmpfiles --create --prefix /var/log/journal');
+    $instance->ssh_assert_script_run(cmd => 'sudo journalctl --flush');
+    $instance->ssh_assert_script_run(cmd => 'sudo systemctl restart systemd-journald');
+
     my $rpm_qa_command = 'rpm -qa --qf "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n" | sort';
     my $rpm_list_before = "/var/tmp/rpm-qa-before-patch-system.txt";
     my $rpm_list_after = "/var/tmp/rpm-qa-after-patch-system.txt";
