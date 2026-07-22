@@ -89,8 +89,14 @@ class TcpServer(socketserver.ThreadingTCPServer):
 try:
 	# Start a thread to take care of https requests
 	httpd_ssl = TcpServer(('127.0.0.1', 443), RegProxy)
-	httpd_ssl.socket = ssl.wrap_socket(httpd_ssl.socket, server_side=True,
-			keyfile="regproxy-key.pem", certfile="regproxy-cert.pem")
+
+	context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+	context.load_cert_chain(
+			keyfile="regproxy-key.pem",
+			certfile="regproxy-cert.pem")
+	httpd_ssl.socket = context.wrap_socket(
+			httpd_ssl.socket,
+			server_side=True)
 
 	_thread.start_new_thread(lambda s: s.serve_forever(), (httpd_ssl,))
 

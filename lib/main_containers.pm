@@ -384,6 +384,7 @@ sub load_container_tests {
         }
         if (get_var('CONTAINERS_KUBEVIRT_SMOKETEST')) {
             loadtest 'containers/k3s_helm_install';
+            loadtest 'console/regproxy';
             loadtest 'containers/kubevirt_smoketest';
             return;
         }
