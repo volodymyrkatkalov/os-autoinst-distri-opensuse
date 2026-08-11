@@ -517,7 +517,7 @@ sub init_consoles {
                 hostname => get_required_var('SUT_IP'),
                 password => $testapi::password,
                 username => 'root',
-                serial => 'rm -f /dev/virtsshserial; mkfifo /dev/virtsshserial; chmod 666 /dev/virtsshserial; while true; do cat /dev/virtsshserial; done',
+                serial => 'exec 9>/run/virtsshserial.lock; flock -n 9 || exit 1; if [ -e /dev/virtsshserial ] && [ ! -p /dev/virtsshserial ]; then echo "/dev/virtsshserial exists and is not a FIFO" >&2; exit 1; fi; rm -f /dev/virtsshserial; mkfifo -m 666 /dev/virtsshserial || exit 1; exec 8<&0; cat <&8 >/dev/null & drain=$!; trap "kill $drain 2>/dev/null; rm -f /dev/virtsshserial" 0 1 2 15; exec 7<>/dev/virtsshserial || exit 1; cat <&7',
                 gui => 1
             }) if (get_var('VIRT_AUTOTEST', '') or get_var('REGRESSION', ''));
     }
