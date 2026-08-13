@@ -664,7 +664,7 @@ sub config_host_security {
         assert_script_run("sed -i -r \'s/^SELINUX=enforcing\$/SELINUX=permissive/g\' /etc/selinux/config");
     }
 
-    script_run("iptables -P INPUT ACCEPT;
+    enter_cmd("iptables -P INPUT ACCEPT;
 iptables -P FORWARD ACCEPT;
 iptables -P OUTPUT ACCEPT;
 iptables -t nat -F;
@@ -672,6 +672,8 @@ iptables -F;
 sysctl -w net.ipv4.ip_forward=1;
 sysctl -w net.ipv4.conf.all.forwarding=1"
     );
+    reset_consoles;
+    select_console("root-ssh");
     save_screenshot;
     setup_common_ssh_config(ssh_id_file => $args{_keyfile});
 }
