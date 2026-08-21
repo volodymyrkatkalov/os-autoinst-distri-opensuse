@@ -23,14 +23,15 @@ sub run {
     set_var('MAINT_TEST_REPO', get_var('INCIDENT_REPO'));
     assert_script_run("dmesg --level=emerg,crit,alert,err -tx|sort -o /tmp/dmesg_err_before.txt") if check_var("PATCH_WITH_ZYPPER", "1");
     assert_script_run "rm -rf /etc/zypp/repos.d/TEST*";
-    add_test_repositories;
-    fully_patch_system;
+    # add_test_repositories;
+    # fully_patch_system;
 
     if (get_var("UPDATE_PACKAGE") =~ /xen|kernel-default|qemu/) {
         script_run("virsh list --all | grep -v Domain-0");
         unless (check_var('VIRT_NEW_GUEST_MIGRATION_DST', '1')) {
             script_retry("nmap $_ -PN -p ssh | grep open", delay => 60, retry => 60) foreach (keys %virt_autotest::common::guests);
         }
+
         script_run '( sleep 15 && reboot & )';
         save_screenshot;
         switch_from_ssh_to_sol_console(reset_console_flag => 'on');
@@ -42,6 +43,27 @@ sub run {
         unless (check_var('VIRT_NEW_GUEST_MIGRATION_DST', '1')) {
             script_retry("nmap $_ -PN -p ssh | grep open", delay => 60, retry => 60) foreach (keys %virt_autotest::common::guests);
         }
+    }
+
+    # Intentionally break the next boot and force systemd into emergency mode.
+    # Enable with PROVOKE_EMERGENCY_MODE=1.
+    if (check_var('PROVOKE_EMERGENCY_MODE', '1')) {
+        my $marker_guard = $testapi::distri->pretty_serial_marker_guard(0);
+        assert_script_run('mkdir -p /mnt/openqa-emergency-test');
+        assert_script_run('cp -a /etc/fstab /etc/fstab.openqa-emergency-backup');
+
+        assert_script_run('echo "/dev/disk/by-uuid/OPENQA-EMERGENCY-TEST /mnt/openqa-emergency-test xfs defaults,x-systemd.device-timeout=10s 0 0" >> /etc/fstab');
+
+        # Verify that our deliberately broken entry is present.
+        assert_script_run("grep OPENQA-EMERGENCY-TEST /etc/fstab");
+
+        record_info('Reboot test');
+        power_action('reboot', textmode => 1);
+        $self->wait_boot(bootloader_time => 300, bootmenu_time => 300, ready_time => 300, textmode => 1);
+
+        reset_consoles;
+        save_screenshot;
+        switch_from_ssh_to_sol_console(reset_console_flag => 'on');
     }
 }
 sub post_run_hook {

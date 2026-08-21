@@ -1581,6 +1581,105 @@ sub random_string {
     return join '', map { @chars[rand @chars] } 1 .. $length;
 }
 
+sub write_openqa_log {
+    my ($filename, $content) = @_;
+
+    mkdir 'ulogs' unless -d 'ulogs';
+
+    my $path = "ulogs/$filename";
+
+    open my $fh, '>:raw', $path
+      or die "Cannot create $path: $!";
+
+    print {$fh} $content;
+    close $fh;
+
+    bmwqemu::diag("Created openQA log: $path");
+
+    return $path;
+}
+
+sub record_ipmi_console_log {
+    my ($title, $resultname, $command) = @_;
+
+    my $console_log = 'ulogs/hardware-console-log.txt';
+    my $token = "${resultname}_$$";
+
+    my $start = "OPENQA_${token}_START";
+    my $done = "OPENQA_${token}_DONE";
+
+    die "HARDWARE_CONSOLE_LOG is not enabled"
+      unless get_var('HARDWARE_CONSOLE_LOG');
+
+    my $offset = -e $console_log ? -s $console_log : 0;
+
+    # IMPORTANT:
+    # The literal $start/$done strings must NOT appear in the command line.
+    enter_cmd(
+        "printf 'OPENQA_%s_START\\n' '$token'; "
+          . "$command; "
+          . "printf 'OPENQA_%s_DONE\\n' '$token'"
+    );
+
+    my $output = '';
+    my $deadline = time + 600;
+
+    while (time < $deadline) {
+        if (-e $console_log) {
+            open my $fh, '<:raw', $console_log
+              or die "Cannot open $console_log: $!";
+
+            seek $fh, $offset, 0;
+
+            local $/;
+            my $new = <$fh>;
+            close $fh;
+
+            if (defined $new && length $new) {
+                $output .= $new;
+                $offset += length $new;
+
+                last if index($output, $done) >= 0;
+            }
+        }
+
+        sleep 1;
+    }
+
+    die "Timed out waiting for $done in $console_log"
+      unless index($output, $done) >= 0;
+
+    # Keep only the output between the REAL markers.
+    $output =~ s/^.*?\Q$start\E\r?\n//s;
+    $output =~ s/\r?\n?\Q$done\E.*$//s;
+
+    # SOL normally produces CRLF.
+    $output =~ s/\r\n/\n/g;
+    $output =~ s/\r/\n/g;
+
+    mkdir 'ulogs' unless -d 'ulogs';
+
+    my $filename = "$resultname.log";
+    my $path = "ulogs/$filename";
+
+    open my $fh, '>:raw', $path
+      or die "Cannot create $path: $!";
+
+    print {$fh} $output;
+    close $fh;
+
+    bmwqemu::diag(
+        "Created $path (" . length($output) . " bytes)"
+    );
+
+    record_info(
+        $title,
+        "Captured " . length($output) . " bytes as $filename"
+    );
+
+    return $filename;
+}
+
 =head2 handle_emergency
 
  handle_emergency();
@@ -1595,15 +1694,44 @@ sub handle_emergency {
         # get emergency shell logs for bug, scp doesn't work
         type_password;
         send_key 'ret';
-        script_run "cat /run/initramfs/rdsosreport.txt > /dev/$serialdev";
-        script_run "echo \"\n--------------Beginning of journalctl--------------\n\" > /dev/$serialdev";
-        script_run "journalctl --no-pager -o short-precise > /dev/$serialdev";
+
+        if (is_ipmi) {
+            record_ipmi_console_log(
+                'Emergency rdsosreport',
+                'rdsosreport',
+                'cat /run/initramfs/rdsosreport.txt'
+            );
+
+            record_ipmi_console_log(
+                'Emergency journal',
+                'emergency-journal',
+                'journalctl --no-pager --full'
+            );
+        }
+        else {
+            script_run "cat /run/initramfs/rdsosreport.txt > /dev/$serialdev";
+            script_run "echo \"\n--------------Beginning of journalctl--------------\n\" > /dev/$serialdev";
+            script_run "journalctl --no-pager -o short-precise > /dev/$serialdev";
+        }
+
         die "hit emergency shell";
     }
+
     elsif (match_has_tag('emergency-mode')) {
         type_password;
         send_key 'ret';
-        script_run "journalctl --no-pager -o short-precise > /dev/$serialdev";
+
+        if (is_ipmi) {
+            record_ipmi_console_log(
+                'Emergency journal',
+                'emergency-journal',
+                'journalctl --no-pager --full'
+            );
+        }
+        else {
+            script_run "journalctl --no-pager -o short-precise > /dev/$serialdev";
+        }
+
         die "hit emergency mode";
     }
 }
