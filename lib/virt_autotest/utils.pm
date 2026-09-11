@@ -27,6 +27,7 @@ use Utils::Backends;
 use IO::Socket::INET;
 use mm_network;
 use Carp;
+use Test::Assert ':all';
 
 our @EXPORT = qw(
   is_vmware_virtualization
@@ -113,6 +114,7 @@ our @EXPORT = qw(
   install_product_software
   collect_guests_supportconfig_and_logs
   reset_network_config
+  validate_host_os_version
 );
 
 my %log_cursors;
@@ -415,6 +417,54 @@ sub reset_log_cursor {
     else {
         %log_cursors = ();
     }
+}
+
+# Extract major and minor version from a version string.
+# For example, "15-SP7" returns (15, 7), "16.1" returns (16, 1), and "16.0" returns (16, 0).
+# This function is used to parse the VERSION variable and compare it with the actual OS version obtained from /etc/os-release.
+# Usage: my ($major, $minor) = extract_os_version($version_string);
+# Returns: ($major_version, $minor_version)
+
+sub extract_os_version {
+    my $version = shift;
+
+    my ($major_version, $sp_version, $dot_version)
+      = $version =~ /(\d+)(?:-SP(\d+)|(\.\d+))/;
+
+    my $minor_version = defined $sp_version ? $sp_version : $dot_version;
+
+    return ($major_version, $minor_version);
+}
+
+# Validate that the host OS version matches the expected version based on the VERSION variable.
+# This function extracts the major and minor version from the VERSION variable and compares it with the actual OS version obtained from /etc/os-release.
+# If there is a mismatch, it will assert and report the discrepancy.
+# Usage: validate_host_os_version()
+# This function does not return any value; it will either pass silently or assert on failure.
+
+sub validate_host_os_version {
+    my ($expected_major, $expected_minor)
+      = extract_os_version(get_required_var('VERSION'));
+
+    my ($actual_major, $actual_minor)
+      = extract_os_version(
+        script_output(
+            'cat /etc/os-release | grep PRETTY_NAME',
+            type_command => 1
+        )
+      );
+
+    assert_equals(
+        $expected_major,
+        $actual_major,
+        "Mismatch for major version, expected $expected_major but got $actual_major"
+    );
+
+    assert_equals(
+        $expected_minor,
+        $actual_minor,
+        "Mismatch for minor version, expected $expected_minor but got $actual_minor"
+    );
 }
 
 # Grep keywords from journals and report warnings, support x86_64 only

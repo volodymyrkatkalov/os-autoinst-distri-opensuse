@@ -15,7 +15,7 @@ use Utils::Backends qw(use_ssh_serial_console is_remote_backend set_ssh_console_
 use version_utils qw(is_sle is_tumbleweed is_sle_micro is_agama is_transactional);
 use utils qw(is_ipxe_boot is_disk_image reconnect_mgmt_console);
 use ipmi_backend_utils;
-use virt_autotest::utils qw(is_xen_host is_kvm_host check_port_state check_host_health is_monolithic_libvirtd double_check_xen_role check_kvm_modules);
+use virt_autotest::utils qw(is_xen_host is_kvm_host check_port_state check_host_health is_monolithic_libvirtd double_check_xen_role check_kvm_modules validate_host_os_version);
 use IPC::Run;
 
 sub set_ssh_console_timeout_before_use {
@@ -272,6 +272,8 @@ sub run {
     }
 
     check_host_health();
+
+    validate_host_os_version();
 }
 
 sub post_fail_hook {
