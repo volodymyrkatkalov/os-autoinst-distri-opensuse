@@ -83,6 +83,7 @@ sub login_to_console {
     }
 
     reset_and_select_console();
+    trigger_emergency_mode_reboot() if get_var('EMERGENCY_MODE_REAL_BOOT');
     if (check_var('PERF_KERNEL', '1') or check_var('CPU_BUGS', '1') or check_var('VT_PERF', '1')) {
         if (get_var("XEN") && check_var('CPU_BUGS', '1')) {
             assert_screen([qw(pxe-qa-net-mitigation qa-net-selection)], 90);
@@ -252,6 +253,32 @@ sub reset_and_select_console {
     else {
         select_console 'sol', await_console => 0;
     }
+}
+
+# Gap 4 verification helper, temporary: with EMERGENCY_MODE_REAL_BOOT set,
+# plant a broken fstab entry for a device that does not exist and reboot, so
+# the host really boots into emergency mode and login_console dies on the
+# emergency-mode needle, with post_fail_hook then running
+# collect_emergency_mode_logs against a genuine maintenance prompt. With the
+# variable unset nothing here runs; rebase this commit away before merge.
+sub trigger_emergency_mode_reboot {
+    # The fresh autoyast install just rebooted; press 'ret' to get the login
+    # prompt back on the SOL console, then log in as root with the same
+    # pattern reboot_and_wait_up uses
+    send_key 'ret' for (0 .. 2);
+    assert_screen [qw(text-login linux-login)], 600;
+    enter_cmd 'root';
+    assert_screen 'password-prompt';
+    type_password;
+    send_key 'ret';
+    assert_screen 'text-logged-in-root';
+    # Without nofail a missing device blocks boot and systemd drops to
+    # 'Give root password for maintenance'
+    enter_cmd("echo 'UUID=00000000-dead-beef-0000-000000000000 /mnt/gap4 ext4 defaults 0 0' >> /etc/fstab");
+    enter_cmd 'reboot';
+    # login_to_console power-cycles the host when it misses the boot needles
+    # with the short autoyast timer; give this real boot a full window instead
+    set_var('NOT_DIRECT_REBOOT_AFTER_AUTOYAST', '1');
 }
 
 sub run {
