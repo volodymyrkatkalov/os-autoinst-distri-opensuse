@@ -2075,7 +2075,11 @@ sub show_tasks_in_blocked_state {
         my $can_use_sysrq_trigger = eval { script_run('test -w /proc/sysrq-trigger', timeout => 30) == 0 };
         if ($can_use_sysrq_trigger) {
             script_run('echo t > /proc/sysrq-trigger');
-            script_run('echo w > /proc/sysrq-trigger');
+            # The kernel writes the w dump to the serial console. script_run()
+            # would consume it while waiting for the shell prompt, so the
+            # wait_serial() below could no longer match the headline. Type the
+            # command and let wait_serial() read the dump instead.
+            enter_cmd('echo w > /proc/sysrq-trigger');
         }
         else {
             send_key 'alt-sysrq-t';
